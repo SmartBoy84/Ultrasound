@@ -1,4 +1,6 @@
 # Ultrasound
+Personal note: Pi is dead, wait a couple of days for polyfuse to fix otherwise try replacing it
+
 Simple started golang project to interface with an ultrasound sensor and send its status to connected clients via UDP
 
 Many interfaces written in Golang for Raspberrypi exist but I found gpiod to be the only one that seems to be actively maintained and works reliably
