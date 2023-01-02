@@ -45,9 +45,9 @@ func main() {
 
 	myroom := Sensor{CallbackFn: func(state int) {
 		if state == activate_code {
-			fmt.Println("TRIGGERED")
 
 			if len(os.Args) > 3 {
+
 				go runCmd()
 			}
 		}
@@ -59,6 +59,6 @@ func main() {
 		}
 
 		fmt.Println("Trying to reconnect")
-		time.Sleep(time.Duration(2000) * time.Millisecond)
+		time.Sleep(time.Duration(1000) * time.Millisecond)
 	}
 }

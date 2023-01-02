@@ -15,34 +15,34 @@ const (
 )
 
 type Sensor struct {
-	State      int
 	CallbackFn func(code int)
 
 	Target *net.UDPAddr
-	Local  *net.UDPAddr
 	Remote *net.UDPConn
 }
 
-func (sensor *Sensor) monitor(ping <-chan bool) {
+func verifyRemote(old *net.UDPAddr, new *net.UDPAddr) bool {
+	return old.IP.String() == new.IP.String() && old.Port == new.Port
+}
+
+func TimeMeOut(conn *net.UDPConn, timer time.Duration) {
+	conn.SetDeadline(time.Now().Add(timer)) // UDP is connectionless, remember? This is all up to us
+}
+
+func (sensor *Sensor) monitor(ping <-chan bool, end chan<- bool) {
+
 	for {
-		time.Sleep(time.Duration(5000+rand.Intn(1000)) * time.Millisecond)
+		time.Sleep(time.Duration(1000+rand.Intn(1000)) * time.Millisecond)
 
 		select {
+
 		case <-ping:
 			continue
+
 		default:
+
 			fmt.Println("Connection to server lost!")
-
-			var err error
-			var localConn *net.UDPConn
-
-			if localConn, err = net.DialUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")}, sensor.Local); err == nil {
-				if _, err = localConn.Write([]byte{deregister_code}); err == nil {
-					return // only stop monitoring NOW
-				}
-			}
-
-			fmt.Print(err.Error())
+			end <- true
 		}
 	}
 }
@@ -53,68 +53,94 @@ func (sensor *Sensor) pong() error {
 
 	read := []byte{0}
 	status := make(chan bool, 1)
+	end := make(chan bool, 1)
 
-	go sensor.monitor(status)
+	go sensor.monitor(status, end)
+
+	// readUDP variables
+	var rlen int
+	var incoming *net.UDPAddr
+	var err error
 
 	for {
-		rlen, incoming, err := sensor.Remote.ReadFromUDP(read)
 
-		if err == nil {
-
-			if rlen == 0 {
-				err = errors.New("incoming message length cannot be 0")
-
-			} else if !(incoming.IP.String() == "127.0.0.1" || (incoming.IP.String() == sensor.Target.IP.String() && incoming.Port == sensor.Target.Port)) {
-				err = errors.New("this ain't the server or me talkin boss")
-
-			} else {
-
-				sensor.State = int(read[0])
-
-				if sensor.State == ping_code {
-
-					if len(status) == 0 {
-						status <- true
-					}
-
-				} else if sensor.State == deregister_code {
-					fmt.Println("Deregistration!")
-					return errors.New("deregistered")
-
-				} else {
-
-					if sensor.CallbackFn != nil {
-						sensor.CallbackFn(sensor.State)
-					}
-				}
-
-				if _, err = sensor.Remote.WriteToUDP(read, sensor.Target); err != nil {
-					err = fmt.Errorf("pong error: %s", err.Error())
-
-				}
-			}
+		if len(end) > 0 {
+			fmt.Println("Deregistration!")
+			return errors.New("deregistered")
 		}
 
 		if err != nil {
-			fmt.Printf("error: %s\n", err.Error())
+			if err, ok := err.(net.Error); err != nil && (!ok || !err.Timeout()) { // ugh, it's SO DAMN UGLY!
+				fmt.Printf("error: %s\n", err.Error())
+			}
 
+			err = nil
 		}
+
+		if rlen, incoming, err = sensor.Remote.ReadFromUDP(read); err != nil {
+			continue
+		}
+
+		if rlen == 0 {
+
+			err = errors.New("incoming message length cannot be 0")
+			continue
+		}
+
+		if !verifyRemote(incoming, sensor.Target) {
+
+			err = errors.New("this ain't the server or me talkin boss")
+			continue
+		}
+
+		switch message := int(read[0]); message {
+
+		case ping_code:
+
+			if len(status) == 0 {
+				status <- true // calm the watchdog
+			}
+
+		case deregister_code:
+
+			fmt.Println("Deregistration!")
+			return errors.New("deregistered")
+
+		default:
+
+			if sensor.CallbackFn != nil {
+				go sensor.CallbackFn(message)
+			}
+		}
+
+		go func() {
+			TimeMeOut(sensor.Remote, time.Second)
+			if _, err = sensor.Remote.WriteToUDP(read, sensor.Target); err != nil {
+				fmt.Printf("pong error: %s", err.Error())
+			}
+		}()
 	}
 }
 
 func GetFreePort() (port int, err error) {
 	for {
 		var a *net.TCPAddr
-		if a, err = net.ResolveTCPAddr("tcp", "0.0.0.0:0"); err == nil {
-			var l *net.TCPListener
-			if l, err = net.ListenTCP("tcp", a); err == nil {
-				defer l.Close()
-				if port := l.Addr().(*net.TCPAddr).Port; port > 300 {
-					return port, nil
-				}
-			}
+		if a, err = net.ResolveTCPAddr("tcp", "0.0.0.0:0"); err != nil {
+			break
+		}
+
+		var l *net.TCPListener
+		if l, err = net.ListenTCP("tcp", a); err != nil {
+			defer l.Close()
+			break
+		}
+
+		if port := l.Addr().(*net.TCPAddr).Port; port > 300 {
+			break
 		}
 	}
+
+	return port, err
 }
 
 func (sensor *Sensor) Register(remote *net.UDPAddr) (err error) {
@@ -135,21 +161,26 @@ func (sensor *Sensor) Register(remote *net.UDPAddr) (err error) {
 	defer server.Close()
 
 	message := []byte{0}
+
 	for i := 0; i < 5; i++ {
 
-		if _, err = server.WriteToUDP([]byte{ping_code}, remote); err == nil {
+		TimeMeOut(server, time.Second)
+		if _, err = server.WriteToUDP([]byte{ping_code}, remote); err != nil {
+			break
+		}
 
-			server.SetDeadline(time.Now().Add(time.Duration(1000) * time.Millisecond)) // UDP is connectionless, remember? This is all up to us
-			if _, _, err = server.ReadFromUDP(message[:]); err == nil {
+		TimeMeOut(server, time.Second)
+		if _, _, err = server.ReadFromUDP(message[:]); err != nil {
+			break
+		}
 
-				if int(message[0]) == ping_code {
-					break
-				} else {
-					err = errors.New("wrong probe reply")
-				}
-			}
+		if int(message[0]) == ping_code {
+			break
+		} else {
+			err = errors.New("wrong probe reply")
 		}
 	}
+
 	if err != nil {
 		return err
 	}
@@ -159,50 +190,50 @@ func (sensor *Sensor) Register(remote *net.UDPAddr) (err error) {
 
 	for i := 0; i < 5; i++ {
 
-		if _, err = server.WriteToUDP([]byte{register_code}, remote); err == nil {
-			fmt.Println("\nRequest sent!")
-
-			message := []byte{0}
-			if _, remote, err = server.ReadFromUDP(message[:]); err == nil {
-
-				if message[0] == register_code {
-
-					fmt.Printf("Acknowledgement received: %s\n", remote.String())
-					server.Close()
-
-					if server, err = net.ListenUDP("udp", local); err == nil {
-						fmt.Println("Contact!")
-
-						if _, err = server.WriteToUDP([]byte{register_code}, remote); err == nil {
-
-							sensor.Remote = server
-							sensor.Target = remote
-							sensor.Local = local // for when I need to stop pong()
-
-							sensor.pong() // // I.e., this will block
-							return nil
-						}
-					}
-
-				} else {
-					err = errors.New("server didn't respond")
-
-				}
-			}
-		}
+		fmt.Print(".")
 
 		if err != nil {
+			time.Sleep(time.Millisecond) // for loop only goes past 1 when err != nil
+
 			fmt.Println(err.Error())
+			err = nil
 		}
 
-		time.Sleep(time.Millisecond * 1000)
-		fmt.Print(".")
+		if _, err = server.WriteToUDP([]byte{register_code}, remote); err != nil {
+			continue
+		}
+
+		fmt.Println("\nRequest sent!")
+
+		if _, remote, err = server.ReadFromUDP(message[:]); err != nil { // yes, I am aware I'm overriding function argument
+			continue
+		}
+
+		if message[0] != register_code {
+
+			err = errors.New("server didn't respond to registration request")
+			continue
+		}
+
+		fmt.Printf("Acknowledgement received: %s\n", remote.String())
+
+		if _, err = server.WriteToUDP([]byte{register_code}, remote); err != nil {
+			continue
+		}
+
+		server.SetReadDeadline(time.Time{}) // reset timeout
+
+		sensor.Remote = server
+		sensor.Target = remote
+
+		sensor.pong() // this blocks, start it up ASAP to send back final registration ping to server
+		return nil
 	}
-	fmt.Println()
 
 	if err == nil {
-		return errors.New("timed out")
+		err = errors.New("timed out")
 	}
 
+	fmt.Println()
 	return err
 }

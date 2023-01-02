@@ -5,9 +5,6 @@ import (
 	"net"
 	"os"
 	"time"
-
-	"github.com/warthog618/gpiod"
-	"github.com/warthog618/gpiod/device/rpi"
 )
 
 const (
@@ -27,33 +24,14 @@ func main() {
 		panic(err)
 	}
 
-	subscribers := Subscribers{wait_n: 3, wait_ms: 1000, tolerance: 3}
-
+	subscribers := Subscribers{wait_time: time.Millisecond * time.Duration(500), tolerance: 5}
 	go subscribers.Registrar(server)
 
-	led, err := gpiod.RequestLine("gpiochip0", rpi.GPIO4, gpiod.AsOutput(0))
-	if err != nil {
-		panic(err)
-	}
 	for {
 		time.Sleep(time.Duration(100) * time.Millisecond)
-		led.SetValue(1)
+		subscribers.SendCode(byte(activate_code))
 		time.Sleep(time.Duration(100) * time.Millisecond)
-		led.SetValue(0)
+		subscribers.SendCode(byte(deactivate_code))
 
 	}
-
-	// sensor.Echo()
-
-	// state := false
-	// for {
-	// 	time.Sleep(time.Duration(500) * time.Millisecond)
-
-	// 	if state = !state; state {
-	// 		subscribers.SendCode(byte(activate_code))
-	// 	} else {
-	// 		subscribers.SendCode(byte(deactivate_code))
-	// 	}
-
-	// }
 }
