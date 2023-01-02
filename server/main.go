@@ -9,7 +9,10 @@ import (
 	"time"
 )
 
-const activate_code = 4
+const (
+	activate_code   = 4
+	deactivate_code = 5
+)
 
 func main() {
 
@@ -27,24 +30,24 @@ func main() {
 	go subscribers.Registrar(server)
 
 	r := bufio.NewReader(os.Stdin)
-	buf := make([]byte, 2)
-	received := false
+	buf := make([]byte, 1)
+	// buf := make([]byte, 2)
+	// received := false
 
 	for {
 		n, err := r.Read(buf)
 
-		if n > 0 && !received { // if this is the first time receiving data after last "end of data"
-			fmt.Printf("Data!")
+		if len(subscribers.list) == 0 {
+			continue
+		}
+
+		switch string(buf[0]) {
+		case "0":
+			fmt.Printf("False!")
+			subscribers.SendCode(byte(deactivate_code))
+		case "1":
+			fmt.Printf("True!")
 			subscribers.SendCode(byte(activate_code))
-
-		}
-
-		if n == 2 && !received { // if we have received a "whole" "packet" and was first time we received data after last "end of data"
-			received = true
-		}
-
-		if n == 1 && received { // length == 1, means we received 1 character or we have reached end of current data stream
-			received = false
 		}
 
 		if n == 0 {
@@ -58,5 +61,19 @@ func main() {
 
 			fmt.Print(err)
 		}
+
+		// if n > 0 && !received { // if this is the first time receiving data after last "end of data"
+		// 	fmt.Printf("Data!")
+		// 	subscribers.SendCode(byte(activate_code))
+
+		// }
+
+		// if n == 2 && !received { // if we have received a "whole" "packet" and was first time we received data after last "end of data"
+		// 	received = true
+		// }
+
+		// if n == 1 && received { // length == 1, means we received 1 character or we have reached end of current data stream
+		// 	received = false
+		// }
 	}
 }

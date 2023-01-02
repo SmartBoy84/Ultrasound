@@ -9,13 +9,19 @@ import (
 	"time"
 )
 
-const activate_code = 4
+const (
+	activate_code   = 4
+	deactivate_code = 5
+)
 
 func main() {
-	if len(os.Args) < 2 || len(strings.Split(os.Args[1], ":")) != 2 {
-		fmt.Println("./server [x.x.x.x]:[1-65535] {[bash program] [args]}")
+
+	if len(os.Args) < 2 || len(os.Args) != 4 || len(strings.Split(os.Args[1], ":")) != 2 {
+		fmt.Println("./server \n    [x.x.x.x]:[1-65535]\n    activate:\"{[bash program] [args]}\"\n    deactivate:\"{[program] [args]}\"")
 		return
 	}
+
+	cmds := [...][]string{strings.Split(os.Args[2], " "), strings.Split(os.Args[3], " ")}
 
 	server, err := net.ResolveUDPAddr("udp", os.Args[1])
 	if err != nil {
@@ -23,17 +29,17 @@ func main() {
 		return
 	}
 
-	runCmd := func() {
-		var cmd *exec.Cmd
+	runCmd := func(cmd []string) {
+		var command *exec.Cmd
 
-		if len(os.Args) == 3 {
-			cmd = exec.Command(os.Args[2])
-		} else {
-			cmd = exec.Command(os.Args[2], os.Args[3:]...)
+		if len(cmd) == 1 {
+			command = exec.Command(cmd[0])
+		} else if len(cmd) > 1 {
+			command = exec.Command(cmd[0], cmd[1:]...)
 		}
 
-		fmt.Printf("Running command: %s\n", cmd.String())
-		err := cmd.Run()
+		fmt.Printf("Running command: %s\n", strings.Join(cmd, " "))
+		err := command.Run()
 
 		if err != nil {
 			fmt.Println(err.Error())
@@ -43,10 +49,11 @@ func main() {
 	myroom := Sensor{CallbackFn: func(state int) {
 
 		if state == activate_code {
-			if len(os.Args) > 3 {
-				go runCmd()
-			}
+			go runCmd(cmds[1])
+		} else if state == deactivate_code {
+			go runCmd(cmds[0])
 		}
+
 	}}
 
 	for {
