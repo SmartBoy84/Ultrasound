@@ -9,10 +9,7 @@ import (
 	"time"
 )
 
-const (
-	activate_code   = 4
-	deactivate_code = 5
-)
+const activate_code = 4
 
 func main() {
 	if len(os.Args) < 2 || len(strings.Split(os.Args[1], ":")) != 2 {
@@ -44,10 +41,9 @@ func main() {
 	}
 
 	myroom := Sensor{CallbackFn: func(state int) {
+
 		if state == activate_code {
-
 			if len(os.Args) > 3 {
-
 				go runCmd()
 			}
 		}

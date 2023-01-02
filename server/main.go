@@ -1,16 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"time"
 )
 
-const (
-	activate_code   = 4
-	deactivate_code = 5
-)
+const activate_code = 4
 
 func main() {
 
@@ -27,11 +26,37 @@ func main() {
 	subscribers := Subscribers{wait_time: time.Millisecond * time.Duration(500), tolerance: 5}
 	go subscribers.Registrar(server)
 
-	for {
-		time.Sleep(time.Duration(100) * time.Millisecond)
-		subscribers.SendCode(byte(activate_code))
-		time.Sleep(time.Duration(100) * time.Millisecond)
-		subscribers.SendCode(byte(deactivate_code))
+	r := bufio.NewReader(os.Stdin)
+	buf := make([]byte, 2)
+	received := false
 
+	for {
+		n, err := r.Read(buf)
+
+		if n > 0 && !received { // if this is the first time receiving data after last "end of data"
+			fmt.Printf("Data!")
+			subscribers.SendCode(byte(activate_code))
+
+		}
+
+		if n == 2 && !received { // if we have received a "whole" "packet" and was first time we received data after last "end of data"
+			received = true
+		}
+
+		if n == 1 && received { // length == 1, means we received 1 character or we have reached end of current data stream
+			received = false
+		}
+
+		if n == 0 {
+			if err == nil {
+				continue
+			}
+
+			if err == io.EOF {
+				break
+			}
+
+			fmt.Print(err)
+		}
 	}
 }
