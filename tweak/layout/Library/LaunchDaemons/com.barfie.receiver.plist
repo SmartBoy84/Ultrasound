@@ -8,8 +8,8 @@
         <array>
                 <string>/usr/libexec/receiver</string>
 		<string>5000</string>
-		<string>"/bin/sh /usr/libexec/receiver.sh 1"</string>
-		<string>"/bin/sh /usr/libexec/receiver.sh 0"</string>
+		<string>/bin/sh /usr/libexec/receiver.sh 1</string>
+		<string>/bin/sh /usr/libexec/receiver.sh 0</string>
         </array>
         <key>RunAtLoad</key>
         <true/>
