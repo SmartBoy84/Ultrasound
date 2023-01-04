@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -57,9 +59,9 @@ func main() {
 
 	}
 
-	settings := &Settings{wait_time: time.Millisecond * time.Duration(500), tolerance: 1, messageReceivedFn: notify}
+	settings := &Settings{wait_time: time.Millisecond * time.Duration(500), tolerance: 5, messageReceivedFn: notify}
 
-	// var runner func(byte) error
+	var SendCode func(byte) error
 
 	var sendWait sync.WaitGroup
 
@@ -70,26 +72,25 @@ func main() {
 		server := resolve("0.0.0.0:" + os.Args[1])
 		subscribers := NewSubscriberList(settings)
 
-		// runner = subscribers.SendCode
+		SendCode = subscribers.SendMessage
 
 		sendWait.Add(1)
-		go subscribers.StartRegistrar(server)
-
-		for {
-			time.Sleep(subscribers.settings.GetWait())
-			subscribers.SendMessage(activate_code)
-		}
-
+		go func() {
+			defer sendWait.Done()
+			fmt.Print(subscribers.StartRegistrar(server))
+		}()
 	} else {
 
 		fmt.Println("Oh! I am but a humble peasant")
 
 		server := resolve(os.Args[1])
 		myself := NewClient(settings)
-		// runner = myself.SendCode
+		SendCode = myself.listener.SendMessage
 
 		sendWait.Add(1)
 		go func() {
+			defer sendWait.Done()
+
 			fmt.Printf("Connecting to %s\n", server)
 
 			for i := 0; i < myself.settings.tolerance; i++ {
@@ -104,44 +105,45 @@ func main() {
 			}
 
 			fmt.Println("\nI'm tired of waiting, goodbye!")
-			sendWait.Done()
 		}()
 
 	}
 
-	// r := bufio.NewReader(os.Stdin)
-	// buf := make([]byte, 1)
-	// // buf := make([]byte, 2)
-	// // received := false
+	go func() {
+		r := bufio.NewReader(os.Stdin)
+		buf := make([]byte, 1)
+		// buf := make([]byte, 2)
+		// received := false
 
-	// for {
-	// 	n, err := r.Read(buf)
+		for {
+			n, err := r.Read(buf)
 
-	// 	if len(subscribers.list) == 0 {
-	// 		continue
-	// 	}
+			// if len(subscribers.list) == 0 {
+			// 	continue
+			// }
 
-	// 	switch string(buf[0]) {
-	// 	case "0":
-	// 		fmt.Printf("False!")
-	// 		subscribers.SendCode(byte(deactivate_code))
-	// 	case "1":
-	// 		fmt.Printf("True!")
-	// 		subscribers.SendCode(byte(activate_code))
-	// 	}
+			switch string(buf[0]) {
+			case "0":
+				fmt.Printf("False!")
+				SendCode(byte(deactivate_code))
+			case "1":
+				fmt.Printf("True!")
+				SendCode(byte(activate_code))
+			}
 
-	// 	if n == 0 {
-	// 		if err == nil {
-	// 			continue
-	// 		}
+			if n == 0 {
+				if err == nil {
+					continue
+				}
 
-	// 		if err == io.EOF {
-	// 			break
-	// 		}
+				if err == io.EOF {
+					break
+				}
 
-	// 		fmt.Print(err)
-	// 	}
-	//}
+				fmt.Print(err)
+			}
+		}
+	}()
 
 	sendWait.Wait()
 }

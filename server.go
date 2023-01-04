@@ -63,13 +63,13 @@ func (subscribers *Subscribers) Register(target *net.UDPAddr, receiver *net.UDPC
 	}
 	defer remote.Close()
 
-	subscriber := &Subscriber{middleMan: &MiddleMan{Remote: remote, Target: target, settings: subscribers.settings}, settings: subscribers.settings}
+	subscriber := &Subscriber{middleMan: &MiddleMan{PrimaryConn: remote, Target: target, settings: subscribers.settings}, settings: subscribers.settings}
 
-	if err = subscriber.middleMan.PingPong(register_code); err != nil { // step 2
+	if err = subscriber.middleMan.PingPong(register_code, subscriber.middleMan.PrimaryConn); err != nil { // step 2
 		return err
 	}
 
-	if err = subscriber.middleMan.PingPong(ping_code); err != nil { // step 3
+	if err = subscriber.middleMan.PingPong(ping_code, subscriber.middleMan.PrimaryConn); err != nil { // step 3
 		return err
 	}
 
@@ -77,23 +77,19 @@ func (subscribers *Subscribers) Register(target *net.UDPAddr, receiver *net.UDPC
 	subscribers.list[subscriber] = nil
 	subscribers.mu.Unlock()
 
-	var sendWait sync.WaitGroup
-
-	sendWait.Add(1)
-
 	subscriber.middleMan.lostConnection = func(err error) {
-		defer sendWait.Done()
 
 		fmt.Print(err)
 		fmt.Println("Enough is enough! EXTERMINATE")
 		delete(subscribers.list, subscriber)
 	}
 
+	fmt.Println("Client successfully registered!")
+
 	// start subscriber routines
 	go subscriber.middleMan.Heartbeat()
-	go subscriber.middleMan.Digest() // start this subcriber's responder routine and then forget about it
+	subscriber.middleMan.Digest() // start this subcriber's responder routine and then forget about it
 
-	sendWait.Wait()
 	return nil // remote closes here as well
 }
 
@@ -105,7 +101,7 @@ func (subscribers *Subscribers) StartRegistrar(local *net.UDPAddr) error {
 	}
 	defer conn.Close() // this will never happen unless ListenUDP() or middleMan fails
 
-	subscribers.Registrar.Remote = conn
+	subscribers.Registrar.PrimaryConn = conn
 
 	subscribers.Registrar.settings.messageReceivedFn = func(target *net.UDPAddr, message []byte) {
 		if message[0] == register_code {

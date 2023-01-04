@@ -9,6 +9,26 @@ import (
 	"time"
 )
 
+/*
+
+Each client causes server to make a separate connection for it
+When client wants to send something to the server, it spins up a new connection on a new port
+Server receives request and offloads it to a goroutine
+The goroutine checks if the request is a ping message, if so it echoes the message
+Otherwise if the request is a ping response (not tagged with a ping header), it adds it to a channel on the struct (doesn't matter if it deadlocks until Heartbeat() runs again)
+Finally, if the request is none of the above, it runs the callback function in another go routine
+
+*/
+
+func createTempConn() (*net.UDPConn, error) {
+	tempRemote, err := net.ListenUDP("udp", resolve(":0")) // :0 gets as [::]:[random free port (in legal range obv)]
+	if err != nil {
+		return nil, err
+	}
+
+	return tempRemote, nil
+}
+
 func resolve(addr string) *net.UDPAddr {
 	server, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
@@ -17,9 +37,9 @@ func resolve(addr string) *net.UDPAddr {
 	return server
 }
 
-func verifyRemote(old *net.UDPAddr, new *net.UDPAddr) bool {
-	return old.IP.String() == new.IP.String() && old.Port == new.Port
-}
+// func verifyRemote(old *net.UDPAddr, new *net.UDPAddr) bool {
+// 	return old.IP.String() == new.IP.String() && old.Port == new.Port
+// }
 
 func (settings *Settings) GetWait() time.Duration {
 	return settings.wait_time + (time.Duration(rand.Intn(1000)))*time.Millisecond
@@ -30,13 +50,14 @@ func TimeMeOut(conn *net.UDPConn, timeLimit time.Duration) {
 }
 
 type MiddleMan struct {
-	Target *net.UDPAddr
-	Remote *net.UDPConn
+	Target      *net.UDPAddr
+	PrimaryConn *net.UDPConn
 
 	settings *Settings
 
 	lostConnection func(error)
 	end            chan bool // token to termine digest()
+	pings          chan bool
 }
 
 type Settings struct {
@@ -50,8 +71,14 @@ type Settings struct {
 
 func (middleMan *MiddleMan) SendMessage(message byte) (err error) {
 
+	tempRemote, err := createTempConn()
+	if err != nil {
+		return err
+	}
+	defer tempRemote.Close()
+
 	for i := 0; i < middleMan.settings.tolerance; i++ {
-		if err := middleMan.PingPong(message); err != nil {
+		if err := middleMan.PingPong(message, tempRemote); err != nil {
 			break
 		}
 	}
@@ -59,15 +86,15 @@ func (middleMan *MiddleMan) SendMessage(message byte) (err error) {
 	return err
 }
 
-func (middleMan *MiddleMan) ReadStatus(status byte) error {
+func (middleMan *MiddleMan) read_status(status byte, tempRemote *net.UDPConn) error {
 
 	read := []byte{0, 0}
 
 	var err error
 	var rlen int
 
-	TimeMeOut(middleMan.Remote, time.Duration(middleMan.settings.GetWait()))
-	if rlen, _, err = middleMan.Remote.ReadFromUDP(read[:]); err != nil {
+	TimeMeOut(tempRemote, time.Duration(middleMan.settings.GetWait()))
+	if rlen, _, err = tempRemote.ReadFromUDP(read[:]); err != nil {
 		return err
 	}
 
@@ -82,12 +109,13 @@ func (middleMan *MiddleMan) ReadStatus(status byte) error {
 	return nil
 }
 
-func (middleMan *MiddleMan) PingPong(message byte) (err error) {
+func (middleMan *MiddleMan) PingPong(message byte, tempRemote *net.UDPConn) (err error) {
 
-	TimeMeOut(middleMan.Remote, time.Duration(middleMan.settings.GetWait()))
-	if _, err = middleMan.Remote.WriteToUDP([]byte{ping_code, message}, middleMan.Target); err == nil {
+	fmt.Printf("Messaging on %s\n", tempRemote.LocalAddr())
 
-		if err = middleMan.ReadStatus(message); err == nil {
+	TimeMeOut(tempRemote, time.Duration(middleMan.settings.GetWait()))
+	if _, err = tempRemote.WriteToUDP([]byte{ping_code, message}, middleMan.Target); err == nil {
+		if err = middleMan.read_status(message, tempRemote); err == nil {
 			return nil
 		}
 	}
@@ -96,35 +124,51 @@ func (middleMan *MiddleMan) PingPong(message byte) (err error) {
 		time.Sleep(middleMan.settings.GetWait())
 	}
 
+	fmt.Print(err)
+
 	return err
+}
+
+func (middleMan *MiddleMan) KillConn(err error) {
+	middleMan.end <- true
+	middleMan.lostConnection(err)
 }
 
 func (middleMan *MiddleMan) Heartbeat() {
 
 	var err error
 	middleMan.end = make(chan bool, 1)
+	middleMan.pings = make(chan bool, 1)
+
+	heartbeatConn, err := createTempConn()
+	if err != nil {
+		middleMan.KillConn(err)
+		return
+	}
+	defer heartbeatConn.Close()
 
 	for {
 
 		time.Sleep(middleMan.settings.GetWait())
 		middleMan.settings.mu.Lock()
 
-		if err = middleMan.PingPong(ping_code); err != nil {
+		if err = middleMan.PingPong(ping_code, heartbeatConn); err != nil {
 			middleMan.settings.failCounter++
-
 			fmt.Printf("[WARNING] %s issued warning %d/%d!\n", middleMan.Target.String(), middleMan.settings.failCounter, middleMan.settings.tolerance)
 
-		} else if middleMan.settings.failCounter > 0 {
-			middleMan.settings.failCounter = 0
+		} else {
+			fmt.Printf("Responded?")
+			if middleMan.settings.failCounter > 0 {
+				middleMan.settings.failCounter = 0
 
-			fmt.Printf("Phew, %s recovered!\n", middleMan.Remote.LocalAddr().String())
+				fmt.Printf("Phew, %s recovered!\n", middleMan.PrimaryConn.LocalAddr().String())
+			}
 		}
 
 		middleMan.settings.mu.Unlock()
 
 		if middleMan.settings.failCounter >= middleMan.settings.tolerance {
-			middleMan.end <- true
-			middleMan.lostConnection(err)
+			middleMan.KillConn(err)
 			return
 		}
 	}
@@ -132,8 +176,6 @@ func (middleMan *MiddleMan) Heartbeat() {
 
 // this function blocks
 func (middleMan *MiddleMan) Digest() error {
-
-	middleMan.Remote.SetReadDeadline(time.Time{}) // reset timeout
 
 	read := []byte{0, 0}
 
@@ -151,45 +193,44 @@ func (middleMan *MiddleMan) Digest() error {
 			return errors.New("deregistered")
 		}
 
-		if err != nil {
-
-			if err, ok := err.(net.Error); err != nil && (!ok || !err.Timeout()) { // ugh, it's SO DAMN UGLY!
-				fmt.Printf("error: %s\n", err.Error())
-			}
-
-			err = nil
-		}
-
-		if rlen, incoming, err = middleMan.Remote.ReadFromUDP(read); err != nil {
-			continue
-		}
-
-		if rlen == 0 {
-
-			err = errors.New("incoming message length cannot be 0")
-			continue
-		}
-
-		if middleMan.Target != nil && !verifyRemote(incoming, middleMan.Target) {
-
-			err = errors.New("stranger danger")
-			continue
-		}
-
-		if middleMan.settings.messageReceivedFn != nil {
-			go middleMan.settings.messageReceivedFn(incoming, read[1:])
-		}
-
-		if int(read[0]) == ping_code {
+		if rlen, incoming, err = middleMan.PrimaryConn.ReadFromUDP(read); err != nil {
 
 			go func() {
+				if err != nil {
+					if err, ok := err.(net.Error); err != nil && (!ok || !err.Timeout()) { // ugh, it's SO DAMN UGLY!
+						fmt.Printf("error: %s\n", err.Error())
 
+					}
+				}
+			}()
+
+			continue
+		}
+
+		go func() {
+			if rlen == 0 {
+
+				fmt.Println("incoming message length cannot be 0")
+
+			}
+
+			if middleMan.settings.messageReceivedFn != nil {
+				go middleMan.settings.messageReceivedFn(incoming, read[1:])
+			}
+
+			if int(read[0]) == ping_code {
+				fmt.Printf("Ping from %s", incoming)
 				var err error
 
 				for i := 0; i < middleMan.settings.tolerance; i++ {
 
-					TimeMeOut(middleMan.Remote, time.Duration(middleMan.settings.GetWait()))
-					if _, err = middleMan.Remote.WriteToUDP([]byte{0, read[1]}, incoming); err == nil {
+					tempRemote, err := createTempConn()
+					if err != nil {
+						fmt.Print(err)
+					}
+
+					TimeMeOut(tempRemote, time.Duration(middleMan.settings.GetWait()))
+					if _, err = tempRemote.WriteToUDP([]byte{0, read[1]}, incoming); err == nil {
 						return
 					}
 
@@ -201,7 +242,7 @@ func (middleMan *MiddleMan) Digest() error {
 				if err != nil {
 					fmt.Printf("pong error: %s", err.Error())
 				}
-			}()
-		}
+			}
+		}()
 	}
 }

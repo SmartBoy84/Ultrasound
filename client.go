@@ -33,19 +33,21 @@ func (client *Client) pong() error {
 func (client *Client) Register(remoteAddr *net.UDPAddr) (err error) {
 
 	// create new local listener address
-	client.listener.Remote, err = net.ListenUDP("udp", resolve(":0")) // :0 gets as [::]:[random free port (in legal range obv)]
+	client.listener.PrimaryConn, err = net.ListenUDP("udp", resolve(":0")) // :0 gets as [::]:[random free port (in legal range obv)]
 	client.listener.Target = remoteAddr
 
 	if err != nil {
 		return err
 	}
-	defer client.listener.Remote.Close() // after a successful registration, this occurs after Pong() fails which happens when MiddleMan.Digest() fails
+	defer client.listener.PrimaryConn.Close() // after a successful registration, this occurs after Pong() fails which happens when MiddleMan.Digest() fails
 
 	message := []byte{0, 0}
 
 	for i := 0; i < client.settings.tolerance; i++ {
-		if err = client.listener.PingPong(ping_code); err != nil {
+		if err = client.listener.PingPong(ping_code, client.listener.PrimaryConn); err != nil {
 			continue
+		} else {
+			break
 		}
 	}
 
@@ -65,13 +67,13 @@ func (client *Client) Register(remoteAddr *net.UDPAddr) (err error) {
 			err = nil
 		}
 
-		if _, err = client.listener.Remote.WriteToUDP([]byte{0, register_code}, remoteAddr); err != nil {
+		if _, err = client.listener.PrimaryConn.WriteToUDP([]byte{0, register_code}, remoteAddr); err != nil {
 			continue
 		}
 
 		fmt.Println("\nRequest sent!")
 
-		if _, client.listener.Target, err = client.listener.Remote.ReadFromUDP(message[:]); err != nil { // we set target here as the server is now listening on a separate port
+		if _, client.listener.Target, err = client.listener.PrimaryConn.ReadFromUDP(message[:]); err != nil { // we set target here as the server is now listening on a separate port
 			continue
 		}
 
@@ -84,7 +86,7 @@ func (client *Client) Register(remoteAddr *net.UDPAddr) (err error) {
 		fmt.Printf("We've shaken hands with %s, let's go!\n", remoteAddr.String())
 
 		// server replies via a PingPong() request so we also need to confirm our existence by doing this manually
-		if _, err = client.listener.Remote.WriteToUDP([]byte{0, register_code}, client.listener.Target); err != nil {
+		if _, err = client.listener.PrimaryConn.WriteToUDP([]byte{0, register_code}, client.listener.Target); err != nil {
 			continue
 		}
 
