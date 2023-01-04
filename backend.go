@@ -57,7 +57,6 @@ type MiddleMan struct {
 
 	lostConnection func(error)
 	end            chan bool // token to termine digest()
-	pings          chan bool
 }
 
 type Settings struct {
@@ -111,8 +110,6 @@ func (middleMan *MiddleMan) read_status(status byte, tempRemote *net.UDPConn) er
 
 func (middleMan *MiddleMan) PingPong(message byte, tempRemote *net.UDPConn) (err error) {
 
-	fmt.Printf("Messaging on %s\n", tempRemote.LocalAddr())
-
 	TimeMeOut(tempRemote, time.Duration(middleMan.settings.GetWait()))
 	if _, err = tempRemote.WriteToUDP([]byte{ping_code, message}, middleMan.Target); err == nil {
 		if err = middleMan.read_status(message, tempRemote); err == nil {
@@ -124,8 +121,7 @@ func (middleMan *MiddleMan) PingPong(message byte, tempRemote *net.UDPConn) (err
 		time.Sleep(middleMan.settings.GetWait())
 	}
 
-	fmt.Print(err)
-
+	fmt.Println(err)
 	return err
 }
 
@@ -138,7 +134,6 @@ func (middleMan *MiddleMan) Heartbeat() {
 
 	var err error
 	middleMan.end = make(chan bool, 1)
-	middleMan.pings = make(chan bool, 1)
 
 	heartbeatConn, err := createTempConn()
 	if err != nil {
@@ -157,11 +152,10 @@ func (middleMan *MiddleMan) Heartbeat() {
 			fmt.Printf("[WARNING] %s issued warning %d/%d!\n", middleMan.Target.String(), middleMan.settings.failCounter, middleMan.settings.tolerance)
 
 		} else {
-			fmt.Printf("Responded?")
 			if middleMan.settings.failCounter > 0 {
 				middleMan.settings.failCounter = 0
 
-				fmt.Printf("Phew, %s recovered!\n", middleMan.PrimaryConn.LocalAddr().String())
+				fmt.Printf("Phew, %s recovered!\n", middleMan.Target)
 			}
 		}
 
@@ -186,6 +180,8 @@ func (middleMan *MiddleMan) Digest() error {
 	var incoming *net.UDPAddr
 	var err error
 
+	middleMan.PrimaryConn.SetDeadline(time.Time{}) // this line is the fix to a bug that took me three hours to find
+
 	for {
 
 		if len(middleMan.end) > 0 {
@@ -197,16 +193,16 @@ func (middleMan *MiddleMan) Digest() error {
 
 			go func() {
 				if err != nil {
+					fmt.Print(err)
+
 					if err, ok := err.(net.Error); err != nil && (!ok || !err.Timeout()) { // ugh, it's SO DAMN UGLY!
 						fmt.Printf("error: %s\n", err.Error())
-
 					}
 				}
 			}()
 
 			continue
 		}
-
 		go func() {
 			if rlen == 0 {
 
@@ -219,7 +215,6 @@ func (middleMan *MiddleMan) Digest() error {
 			}
 
 			if int(read[0]) == ping_code {
-				fmt.Printf("Ping from %s", incoming)
 				var err error
 
 				for i := 0; i < middleMan.settings.tolerance; i++ {
