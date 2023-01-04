@@ -9,17 +9,6 @@ import (
 	"time"
 )
 
-/*
-
-Each client causes server to make a separate connection for it
-When client wants to send something to the server, it spins up a new connection on a new port
-Server receives request and offloads it to a goroutine
-The goroutine checks if the request is a ping message, if so it echoes the message
-Otherwise if the request is a ping response (not tagged with a ping header), it adds it to a channel on the struct (doesn't matter if it deadlocks until Heartbeat() runs again)
-Finally, if the request is none of the above, it runs the callback function in another go routine
-
-*/
-
 func createTempConn() (*net.UDPConn, error) {
 	tempRemote, err := net.ListenUDP("udp", resolve(":0")) // :0 gets as [::]:[random free port (in legal range obv)]
 	if err != nil {
@@ -37,10 +26,6 @@ func resolve(addr string) *net.UDPAddr {
 	return server
 }
 
-// func verifyRemote(old *net.UDPAddr, new *net.UDPAddr) bool {
-// 	return old.IP.String() == new.IP.String() && old.Port == new.Port
-// }
-
 func (settings *Settings) GetWait() time.Duration {
 	return settings.wait_time + (time.Duration(rand.Intn(1000)))*time.Millisecond
 }
@@ -50,21 +35,22 @@ func TimeMeOut(conn *net.UDPConn, timeLimit time.Duration) {
 }
 
 type MiddleMan struct {
+	mu sync.Mutex
+
 	Target      *net.UDPAddr
 	PrimaryConn *net.UDPConn
 
 	settings *Settings
 
 	lostConnection func(error)
+	failCounter    int
 	end            chan bool // token to termine digest()
 }
 
 type Settings struct {
-	mu        sync.Mutex
 	wait_time time.Duration
 	tolerance int // max amount of connection failures before client is removed all together
 
-	failCounter       int
 	messageReceivedFn func(target *net.UDPAddr, state []byte)
 }
 
@@ -78,6 +64,8 @@ func (middleMan *MiddleMan) SendMessage(message byte) (err error) {
 
 	for i := 0; i < middleMan.settings.tolerance; i++ {
 		if err := middleMan.PingPong(message, tempRemote); err != nil {
+			fmt.Print(err)
+		} else {
 			break
 		}
 	}
@@ -121,13 +109,15 @@ func (middleMan *MiddleMan) PingPong(message byte, tempRemote *net.UDPConn) (err
 		time.Sleep(middleMan.settings.GetWait())
 	}
 
-	fmt.Println(err)
 	return err
 }
 
 func (middleMan *MiddleMan) KillConn(err error) {
 	middleMan.end <- true
-	middleMan.lostConnection(err)
+	middleMan.PrimaryConn.Close() // order matters!
+	if middleMan.lostConnection != nil {
+		middleMan.lostConnection(err) // placing this last ensures user doesn't accidently use a confirmed dead connection
+	}
 }
 
 func (middleMan *MiddleMan) Heartbeat() {
@@ -145,23 +135,22 @@ func (middleMan *MiddleMan) Heartbeat() {
 	for {
 
 		time.Sleep(middleMan.settings.GetWait())
-		middleMan.settings.mu.Lock()
+		middleMan.mu.Lock()
 
 		if err = middleMan.PingPong(ping_code, heartbeatConn); err != nil {
-			middleMan.settings.failCounter++
-			fmt.Printf("[WARNING] %s issued warning %d/%d!\n", middleMan.Target.String(), middleMan.settings.failCounter, middleMan.settings.tolerance)
+			middleMan.failCounter++
+			fmt.Printf("[WARNING] %s issued warning %d/%d!\n", middleMan.Target.String(), middleMan.failCounter, middleMan.settings.tolerance)
 
-		} else {
-			if middleMan.settings.failCounter > 0 {
-				middleMan.settings.failCounter = 0
+		} else if middleMan.failCounter > 0 {
+			middleMan.failCounter = 0
 
-				fmt.Printf("Phew, %s recovered!\n", middleMan.Target)
-			}
+			fmt.Printf("Phew, %s recovered!\n", middleMan.Target)
 		}
 
-		middleMan.settings.mu.Unlock()
+		middleMan.mu.Unlock()
 
-		if middleMan.settings.failCounter >= middleMan.settings.tolerance {
+		if middleMan.failCounter >= middleMan.settings.tolerance {
+			heartbeatConn.Close() // for some reason I have to do it here as well
 			middleMan.KillConn(err)
 			return
 		}
@@ -183,31 +172,25 @@ func (middleMan *MiddleMan) Digest() error {
 	middleMan.PrimaryConn.SetDeadline(time.Time{}) // this line is the fix to a bug that took me three hours to find
 
 	for {
-
-		if len(middleMan.end) > 0 {
-			fmt.Println("Deregistration!")
-			return errors.New("deregistered")
-		}
-
 		if rlen, incoming, err = middleMan.PrimaryConn.ReadFromUDP(read); err != nil {
 
-			go func() {
-				if err != nil {
-					fmt.Print(err)
+			if len(middleMan.end) > 0 {
+				fmt.Println("Deregistration!")
+				return errors.New("deregistered")
+			}
 
-					if err, ok := err.(net.Error); err != nil && (!ok || !err.Timeout()) { // ugh, it's SO DAMN UGLY!
-						fmt.Printf("error: %s\n", err.Error())
-					}
+			go func() {
+				if err, ok := err.(net.Error); err != nil && (!ok || !err.Timeout()) { // ugh, it's SO DAMN UGLY!
+					fmt.Printf("error: %s\n", err.Error())
 				}
 			}()
 
 			continue
 		}
+
 		go func() {
 			if rlen == 0 {
-
 				fmt.Println("incoming message length cannot be 0")
-
 			}
 
 			if middleMan.settings.messageReceivedFn != nil {

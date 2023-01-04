@@ -16,20 +16,6 @@ func NewClient(settings *Settings) *Client {
 	return &Client{settings: settings, listener: &MiddleMan{settings: settings}}
 }
 
-func (client *Client) pong() error {
-
-	fmt.Printf("Done! Connection to server established\n\n")
-
-	client.listener.lostConnection = func(err error) {
-		fmt.Print(err)
-	}
-
-	go client.listener.Heartbeat()
-	client.listener.Digest() // this blocks until connection is lost
-
-	return errors.New("connection lost")
-}
-
 func (client *Client) Register(remoteAddr *net.UDPAddr) (err error) {
 
 	// create new local listener address
@@ -39,7 +25,7 @@ func (client *Client) Register(remoteAddr *net.UDPAddr) (err error) {
 	if err != nil {
 		return err
 	}
-	defer client.listener.PrimaryConn.Close() // after a successful registration, this occurs after Pong() fails which happens when MiddleMan.Digest() fails
+	defer client.listener.PrimaryConn.Close() // after a successful registration, this occurs after MiddleMan.Digest() fails
 
 	message := []byte{0, 0}
 
@@ -90,14 +76,21 @@ func (client *Client) Register(remoteAddr *net.UDPAddr) (err error) {
 			continue
 		}
 
-		client.pong() // this blocks, start it up ASAP to send back final registration ping to server
-		return nil
+		fmt.Printf("Done! Connection to server established\n\n")
+
+		// client.listener.lostConnection = func(err error) {
+		// 	fmt.Println("Connection to server lost")
+		// }
+
+		go client.listener.Heartbeat()
+		client.listener.Digest() // this blocks until connection is lost
+
+		return nil // even though connection has been lost, we were still able to successfully register so this it was a success!
 	}
 
 	if err == nil {
-		err = errors.New("timed out")
+		err = errors.New("registration timed out")
 	}
 
-	fmt.Println()
 	return err
 }

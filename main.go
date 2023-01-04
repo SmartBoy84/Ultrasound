@@ -13,10 +13,12 @@ import (
 )
 
 const (
+	// notifiers
 	ping_code       = 1
 	register_code   = 2
-	deregister_code = 3
+	deregister_code = 3 // this isn't really required thanks to my overengineered heartbeat system
 
+	// custom messages
 	activate_code   = 4
 	deactivate_code = 5
 )
@@ -32,6 +34,10 @@ func main() {
 
 	runCmd := func(cmd []string) {
 		var command *exec.Cmd
+
+		if len(cmd) == 0 {
+			return
+		}
 
 		if len(cmd) == 1 {
 			command = exec.Command(cmd[0])
@@ -49,20 +55,20 @@ func main() {
 
 	notify := func(target *net.UDPAddr, message []byte) {
 
-		fmt.Printf("State %d, client %s\n", message, target.String())
+		if len(message) == 0 {
+			return
+		}
 
 		if message[0] == activate_code {
 			go runCmd(cmds[1])
 		} else if message[0] == deactivate_code {
 			go runCmd(cmds[0])
 		}
-
 	}
 
-	settings := &Settings{wait_time: time.Millisecond * time.Duration(500), tolerance: 5, messageReceivedFn: notify}
+	settings := &Settings{wait_time: time.Millisecond * time.Duration(500), tolerance: 3, messageReceivedFn: notify}
 
 	var SendCode func(byte) error
-
 	var sendWait sync.WaitGroup
 
 	if len(strings.Split(os.Args[1], ":")) == 1 {
@@ -71,7 +77,6 @@ func main() {
 
 		server := resolve("0.0.0.0:" + os.Args[1])
 		subscribers := NewSubscriberList(settings)
-
 		SendCode = subscribers.SendMessage
 
 		sendWait.Add(1)
@@ -93,39 +98,32 @@ func main() {
 
 			fmt.Printf("Connecting to %s\n", server)
 
-			for i := 0; i < myself.settings.tolerance; i++ {
+			for i := 0; i <= myself.settings.tolerance; i++ {
 
 				if err := myself.Register(server); err != nil {
 					fmt.Println(err)
 				} else {
+					fmt.Printf("Connection to server lost\n\nTrying to reconnect\n")
 					i = 0
 				}
-
 				time.Sleep(settings.GetWait())
 			}
-
 			fmt.Println("\nI'm tired of waiting, goodbye!")
 		}()
-
 	}
 
 	go func() {
 		r := bufio.NewReader(os.Stdin)
 		buf := make([]byte, 1)
-		// buf := make([]byte, 2)
-		// received := false
 
 		for {
 			n, err := r.Read(buf)
-
-			// if len(subscribers.list) == 0 {
-			// 	continue
-			// }
 
 			switch string(buf[0]) {
 			case "0":
 				fmt.Printf("False!")
 				SendCode(byte(deactivate_code))
+
 			case "1":
 				fmt.Printf("True!")
 				SendCode(byte(activate_code))

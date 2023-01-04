@@ -24,8 +24,11 @@ type Subscribers struct {
 }
 
 func NewSubscriberList(settings *Settings) *Subscribers {
+	subscribers := Subscribers{
+		settings:  settings,
+		Registrar: &MiddleMan{settings: &Settings{tolerance: settings.tolerance, wait_time: settings.wait_time}}, // must do it like this because our callback function is different
+	}
 
-	subscribers := Subscribers{settings: settings, Registrar: &MiddleMan{settings: settings}}
 	subscribers.list = make(map[*Subscriber]interface{})
 
 	return &subscribers
@@ -78,10 +81,10 @@ func (subscribers *Subscribers) Register(target *net.UDPAddr, receiver *net.UDPC
 	subscribers.mu.Unlock()
 
 	subscriber.middleMan.lostConnection = func(err error) {
+		delete(subscribers.list, subscriber)
 
 		fmt.Print(err)
-		fmt.Println("Enough is enough! EXTERMINATE")
-		delete(subscribers.list, subscriber)
+		fmt.Println("\nInactive client removed from list")
 	}
 
 	fmt.Println("Client successfully registered!")
