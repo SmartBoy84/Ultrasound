@@ -7,6 +7,7 @@ if [ ! -z "$1" ]; then
     
     if [[ "$1" -eq "1" ]] ; then
         # do something if activate signal was sent
+        activator send libactivator.system.vibrate
     fi
     
 fi
