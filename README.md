@@ -6,7 +6,7 @@ Simple started golang project to interface with an ultrasound sensor and send it
 Many interfaces written in Golang for Raspberrypi exist but I found gpiod to be the only one that seems to be actively maintained and works reliably
 j8 is a preset of offsets which map the physical location of a pin on the PI's J8 header (long strip on pins one side), counting from top right -> bottom left, to their kernel index
 
-Implementation details: 
+~~Implementation details~~ this is mostly redundant due to a complete overhaul in the code: 
 1. Server is started and the subscribers list is created
 2. Sensor is initialised: trigger set as output and echo set as input (pulled down)
 3. Echo average time-to-return calculated and stored
