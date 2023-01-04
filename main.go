@@ -60,9 +60,9 @@ func main() {
 		}
 
 		if message[0] == activate_code {
-			go runCmd(cmds[1])
-		} else if message[0] == deactivate_code {
 			go runCmd(cmds[0])
+		} else if message[0] == deactivate_code {
+			go runCmd(cmds[1])
 		}
 	}
 
