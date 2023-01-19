@@ -1,5 +1,6 @@
 #!/bin/sh
 chown root:wheel /Library/LaunchDaemons/com.barfie.receiver.plist
+launchctl unload /Library/LaunchDaemons/com.barfie.receiver.plist || true
 launchctl load /Library/LaunchDaemons/com.barfie.receiver.plist || true
 chown root:wheel /usr/libexec/receiver.sh
 chmod +s /usr/libexec/receiver.sh
